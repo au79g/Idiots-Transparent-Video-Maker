@@ -398,6 +398,18 @@ class App(tk.Tk):
                        self._fv_browse_output)
 
         make_section(outer, "FRAME FILENAME PATTERN")
+
+        # Warning/status banner for pattern issues
+        self.fv_pattern_banner = tk.Frame(outer, bg="#1a1500",
+                                           highlightthickness=1,
+                                           highlightbackground=WARNING)
+        self.fv_pattern_banner_lbl = tk.Label(
+            self.fv_pattern_banner,
+            text="",
+            font=("Consolas", 9), fg=WARNING, bg="#1a1500", justify="left")
+        self.fv_pattern_banner_lbl.pack(padx=10, pady=6, anchor="w")
+        # Hidden by default — shown when a bad pattern is detected
+
         pat_row = tk.Frame(outer, bg=BG)
         pat_row.pack(fill="x", padx=24, pady=5)
         tk.Label(pat_row, text="Pattern:", width=14, anchor="w",
@@ -408,9 +420,24 @@ class App(tk.Tk):
                  highlightbackground=BORDER, highlightcolor=ACCENT
                  ).pack(side="left", ipady=5, padx=(0, 8))
         make_btn(pat_row, "Auto-detect", self._fv_autodetect,
-                 small=True).pack(side="left")
-        tk.Label(pat_row, text="  e.g.  frame%04d.png   img%03d.png",
-                 font=("Consolas", 8), fg=SUBTEXT, bg=BG).pack(side="left", padx=6)
+                 small=True).pack(side="left", padx=(0, 6))
+        tk.Label(pat_row, text="e.g.  frame%04d.png   img%03d.png",
+                 font=("Consolas", 8), fg=SUBTEXT, bg=BG).pack(side="left", padx=4)
+
+        # Rename frames section
+        rename_frame = tk.Frame(outer, bg=PANEL2,
+                                highlightthickness=1, highlightbackground=BORDER)
+        rename_frame.pack(fill="x", padx=24, pady=(2, 4))
+        rn_left = tk.Frame(rename_frame, bg=PANEL2)
+        rn_left.pack(side="left", fill="x", expand=True, padx=12, pady=8)
+        tk.Label(rn_left,
+                 text="If your files have an unsupported name format  (e.g.  01 (1).png,  01 (2).png ...)",
+                 font=("Consolas", 9), fg=TEXT, bg=PANEL2).pack(anchor="w")
+        tk.Label(rn_left,
+                 text="use Rename Frames to rename them to  frame0001.png, frame0002.png ...  in sorted order.",
+                 font=("Consolas", 9), fg=SUBTEXT, bg=PANEL2).pack(anchor="w")
+        make_btn(rename_frame, "⟳  Rename Frames", self._fv_rename_frames,
+                 accent=True).pack(side="right", padx=12, pady=8, ipadx=8, ipady=4)
 
         make_section(outer, "OUTPUT SETTINGS")
         fps_row = tk.Frame(outer, bg=BG)
@@ -534,20 +561,92 @@ class App(tk.Tk):
         if not pngs:
             self._wlog(self.fv_log, "  No PNG files found in that folder.\n", "warn")
             return
-        m = re.match(r'^([a-zA-Z_\-]+)(\d+)\.png$', pngs[0])
-        if m:
-            prefix = m.group(1)
-            width  = len(m.group(2))
+        sample = pngs[0]
+        m_std = re.match(r'^([a-zA-Z_\-]+)(\d+)\.png$', sample)
+        m_win = re.match(r'^(.+?)\s*\((\d+)\)\.png$', sample)
+        if m_std:
+            prefix = m_std.group(1)
+            width  = len(m_std.group(2))
             pat    = f"{prefix}%0{width}d.png"
             self.fv_pattern.set(pat)
+            self._fv_hide_banner()
             self._wlog(self.fv_log,
                        f"  Auto-detected pattern: {pat}  ({len(pngs)} frames)\n",
                        "ok")
+        elif m_win:
+            self.fv_pattern.set("— rename required —")
+            self._fv_show_banner(
+                f"  ⚠  Unsupported filename format:  {sample}\n"
+                f"  ffmpeg cannot read files named like  01 (1).png, 01 (2).png ...\n"
+                f"  Click  ⟳ Rename Frames  to rename them to  frame0001.png, frame0002.png ...\n"
+                f"  ({len(pngs)} frames found)"
+            )
+            self._wlog(self.fv_log,
+                       f"  ⚠  Windows copy-style filenames detected ({sample}).\n"
+                       f"  Use  ⟳ Rename Frames  to fix this automatically.\n",
+                       "warn")
         else:
             self._wlog(self.fv_log,
                        f"  Could not auto-detect pattern.\n"
-                       f"  First file: {pngs[0]} — set pattern manually.\n",
+                       f"  First file: {sample}\n"
+                       f"  Try  ⟳ Rename Frames  to normalize the filenames.\n",
                        "warn")
+
+    def _fv_show_banner(self, msg):
+        self.fv_pattern_banner_lbl.config(text=msg)
+        self.fv_pattern_banner.pack(fill="x", padx=24, pady=(0, 4))
+
+    def _fv_hide_banner(self):
+        self.fv_pattern_banner.pack_forget()
+
+    def _fv_rename_frames(self):
+        folder = self.fv_folder.get().strip()
+        if not folder or not os.path.isdir(folder):
+            messagebox.showerror("No folder", "Please select a frames folder first.")
+            return
+        pngs = sorted([f for f in os.listdir(folder) if f.lower().endswith(".png")])
+        if not pngs:
+            messagebox.showerror("No frames", "No PNG files found in that folder.")
+            return
+        # Check if already in standard format
+        if re.match(r'^frame\d{4}\.png$', pngs[0]):
+            messagebox.showinfo("Already clean",
+                                "Files are already named frame0001.png etc. — no rename needed.")
+            return
+        # Confirm
+        ans = messagebox.askyesno(
+            "Rename frames?",
+            f"This will rename {len(pngs)} PNG files in:\n{folder}\n\n"
+            f"  {pngs[0]}  →  frame0001.png\n"
+            f"  {pngs[1] if len(pngs) > 1 else '...'}  →  frame0002.png\n"
+            f"  ...\n\n"
+            f"The original names will be lost. Continue?"
+        )
+        if not ans:
+            return
+        # Rename via temp names first to avoid collisions
+        self._wlog(self.fv_log,
+                   f"\n⟳  Renaming {len(pngs)} frames...\n", "head")
+        try:
+            tmp_names = []
+            for i, name in enumerate(pngs):
+                src = os.path.join(folder, name)
+                tmp = os.path.join(folder, f"__tmp_rename_{i:06d}__.png")
+                os.rename(src, tmp)
+                tmp_names.append(tmp)
+            for i, tmp in enumerate(tmp_names):
+                dst = os.path.join(folder, f"frame{i+1:04d}.png")
+                os.rename(tmp, dst)
+            self._wlog(self.fv_log,
+                       f"  ✓  Renamed {len(pngs)} files to frame0001.png ... "
+                       f"frame{len(pngs):04d}.png\n", "ok")
+            self.fv_pattern.set("frame%04d.png")
+            self._fv_hide_banner()
+            self._wlog(self.fv_log,
+                       f"  Pattern set to  frame%04d.png  — ready to encode.\n",
+                       "ok")
+        except Exception as ex:
+            self._wlog(self.fv_log, f"  Error during rename: {ex}\n", "err")
 
     # ── Tool check ────────────────────────────────────────────────────────────
     def _check_tools(self):
